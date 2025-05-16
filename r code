@@ -1,0 +1,91 @@
+# Financial Risk Analysis in R using "Give Me Some Credit" dataset
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(pROC)
+library(randomForest)
+library(readr)
+
+# 1. Load Data
+data <- read_csv("data/raw/cs-training.csv")
+
+# Remove ID column
+data <- data[,-1]
+
+# 2. Data Cleaning
+# Handle outliers and missing values
+data_clean <- data %>%
+  filter(RevolvingUtilizationOfUnsecuredLines <= 1) %>%
+  mutate(
+    MonthlyIncome = ifelse(is.na(MonthlyIncome), 
+                           median(MonthlyIncome, na.rm = TRUE), 
+                           MonthlyIncome),
+    NumberOfDependents = ifelse(is.na(NumberOfDependents), 
+                                median(NumberOfDependents, na.rm = TRUE), 
+                                NumberOfDependents)
+  )
+
+# Save cleaned data
+write_csv(data_clean, "data/processed/cleaned_data.csv")
+
+# 3. Exploratory Data Analysis
+# Default Rate Plot
+ggplot(data_clean, aes(x = factor(SeriousDlqin2yrs))) +
+  geom_bar(fill = "tomato") +
+  labs(title = "Default Distribution", x = "Default (1 = Yes)", y = "Count")
+
+# Monthly Income Distribution
+ggplot(data_clean, aes(x = MonthlyIncome)) +
+  geom_histogram(binwidth = 1000, fill = "steelblue", color = "black") +
+  labs(title = "Monthly Income Distribution")
+
+# 4. Model Building
+# Split Data
+set.seed(123)
+train_index <- createDataPartition(data_clean$SeriousDlqin2yrs, p = 0.7, list = FALSE)
+train_data <- data_clean[train_index, ]
+test_data <- data_clean[-train_index, ]
+
+# Logistic Regression
+logit_model <- glm(SeriousDlqin2yrs ~ ., data = train_data, family = binomial)
+summary(logit_model)
+
+# Predict on test set
+logit_preds <- predict(logit_model, newdata = test_data, type = "response")
+logit_class <- ifelse(logit_preds > 0.5, 1, 0)
+
+# Evaluation
+conf_matrix <- confusionMatrix(factor(logit_class), factor(test_data$SeriousDlqin2yrs))
+print(conf_matrix)
+
+roc_curve <- roc(test_data$SeriousDlqin2yrs, logit_preds)
+plot(roc_curve, col = "blue")
+auc(roc_curve)
+
+# 5. Random Forest Model (optional)
+rf_model <- randomForest(factor(SeriousDlqin2yrs) ~ ., data = train_data, ntree = 100)
+rf_preds <- predict(rf_model, newdata = test_data, type = "prob")
+rf_class <- ifelse(rf_preds[,2] > 0.5, 1, 0)
+
+# Evaluation
+conf_matrix_rf <- confusionMatrix(factor(rf_class), factor(test_data$SeriousDlqin2yrs))
+print(conf_matrix_rf)
+
+roc_rf <- roc(test_data$SeriousDlqin2yrs, rf_preds[,2])
+plot(roc_rf, col = "green")
+auc(roc_rf)
+
+# 6. Risk Scoring
+# Assign risk category based on predicted probability
+risk_scores <- data.frame(ID = 1:nrow(test_data),
+                          Prob_Default = logit_preds)
+risk_scores$Risk_Level <- cut(risk_scores$Prob_Default,
+                              breaks = c(-Inf, 0.3, 0.6, Inf),
+                              labels = c("Low", "Medium", "High"))
+
+# Export to Excel-readable CSV
+write_csv(risk_scores, "output/risk_scores.csv")
+
+# END
